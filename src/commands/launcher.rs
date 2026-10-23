@@ -113,11 +113,9 @@ impl LauncherCommands {
                             .push(("Enabled Capabilities", cfg.enabled_capabilities.join(", ")));
                     }
 
-                    if let Some(obj) = cfg.config.as_object() {
-                        for (k, v) in obj {
-                            instance_fields.push(("Config", format!("{k} = {v}")))
-                        }
-                    }
+                    let config_fields = crate::commands::shared::config_fields(&cfg.config);
+                    instance_fields
+                        .extend(config_fields.iter().map(|(k, v)| (k.as_str(), v.clone())));
 
                     ctx.ui.detail(id, &instance_fields);
                 }
@@ -352,7 +350,15 @@ impl LauncherCommands {
     /// Deletes the launcher's config file and removes it from the in-memory
     /// config. After this call `launcher list` will no longer show the entry
     /// and `granite-cli launch <id>` will return an error.
-    pub fn remove(ctx: &mut crate::AppContext, launcher_id: &str) -> Result<()> {
+    ///
+    /// `policy` controls what happens to dependents: `Cascade` removes them
+    /// too, `Refuse` aborts, `Leave` strands them. `None` asks interactively
+    /// or leaves in non-interactive sessions.
+    pub fn remove(
+        ctx: &mut crate::AppContext,
+        launcher_id: &str,
+        policy: Option<crate::commands::shared::remediation::DependentsPolicy>,
+    ) -> Result<()> {
         if ctx.config().get_launcher(launcher_id).is_none() {
             anyhow::bail!("No launcher configured with id '{launcher_id}'. Nothing to remove.");
         }
@@ -362,13 +368,14 @@ impl LauncherCommands {
             ctx,
             RefKind::Launcher,
             launcher_id,
+            policy,
         )? {
             crate::commands::shared::remediation::Removal::Cancel => {
                 ctx.ui.info(&format!("Keeping launcher '{launcher_id}'."));
                 return Ok(());
             }
             crate::commands::shared::remediation::Removal::Proceed { with } => {
-                crate::commands::shared::remediation::remove_all(ctx, &with)?;
+                crate::commands::shared::remediation::remove_all(ctx, &with, policy)?;
             }
         }
 
@@ -421,6 +428,8 @@ async fn select_capabilities(
                 cap.binding_types()
                     .iter()
                     .any(|bt| launcher_def.supported_capabilities.contains(bt))
+                    && crate::launchers::mcp_transport_conflict(launcher_def, cap.as_ref())
+                        .is_none()
             })
             .map(|(id, _)| id)
             .collect();
@@ -438,8 +447,9 @@ async fn select_capabilities(
             .collect();
         if !carried.is_empty() && !announced {
             ctx.ui.warn(&format!(
-                "Left enabled but not listed below: {}. Each one is missing or \
-                 has a reference that does not resolve.",
+                "Left enabled but not listed below: {}. Each one is missing, has a \
+                 reference that does not resolve, or uses an MCP transport this \
+                 launcher cannot register.",
                 carried.join(", ")
             ));
             announced = true;
@@ -520,6 +530,21 @@ async fn select_capabilities(
         let nickname = ctx.ui.text("Name this capability instance", cap_type)?;
 
         crate::commands::CapabilityCommands::setup(ctx, cap_type, Some(&nickname), false).await?;
+
+        // The transport is only known once the capability is configured, so
+        // this is the first point the new instance can be checked.
+        if let Ok(configured) = ctx.sources().capabilities().get(&nickname)
+            && let Some(conflict) =
+                crate::launchers::mcp_transport_conflict(launcher_def, configured.as_ref())
+        {
+            ctx.ui.warn(&format!(
+                "'{nickname}' uses the {} MCP transport, which this launcher cannot \
+                 register (it supports: {}). It was configured but will not be enabled here.",
+                conflict.transport,
+                conflict.offered.join(", ")
+            ));
+            continue;
+        }
 
         // Pre-select the new capability on the next iteration.
         enabled.push(nickname.clone());
@@ -840,7 +865,7 @@ mod tests {
         let mut ctx = ctx_with_launcher("my-claude", "claude");
         assert!(ctx.config().get_launcher("my-claude").is_some());
 
-        LauncherCommands::remove(&mut ctx, "my-claude").unwrap();
+        LauncherCommands::remove(&mut ctx, "my-claude", None).unwrap();
 
         assert!(ctx.config().get_launcher("my-claude").is_none());
         let infos = infos!(ctx);
@@ -854,7 +879,7 @@ mod tests {
     #[test]
     fn remove_nonexistent_launcher_returns_err() {
         let mut ctx = test_ctx();
-        let result = LauncherCommands::remove(&mut ctx, "doesnt-exist");
+        let result = LauncherCommands::remove(&mut ctx, "doesnt-exist", None);
         assert!(result.is_err());
         assert!(
             result
@@ -868,7 +893,7 @@ mod tests {
     fn list_does_not_show_removed_launcher() {
         let _home = crate::config::TestConfigHome::new();
         let mut ctx = ctx_with_launcher("my-claude", "claude");
-        LauncherCommands::remove(&mut ctx, "my-claude").unwrap();
+        LauncherCommands::remove(&mut ctx, "my-claude", None).unwrap();
         LauncherCommands::list(&ctx).unwrap();
         let tables = tables!(ctx);
         let (_, _, rows) = &tables[0];
@@ -907,6 +932,7 @@ mod tests {
     fn no_capabilities_launcher_def() -> crate::launchers::LauncherMetadata {
         crate::launchers::LauncherMetadata {
             supported_capabilities: std::collections::HashSet::new(),
+            mcp_transports: std::collections::HashSet::new(),
             ..bob_launcher_def()
         }
     }
