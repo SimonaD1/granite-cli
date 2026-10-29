@@ -38,7 +38,7 @@ pub(crate) struct LauncherSource {
 }
 
 impl LauncherSource {
-    pub(crate) fn from_config(config: &crate::config::Config) -> Self {
+    pub(crate) fn new(config: &crate::config::Config) -> Self {
         Self {
             configs: config.launchers.clone(),
             cache: std::sync::Mutex::new(HashMap::new()),
@@ -179,7 +179,7 @@ mod tests {
             },
         );
 
-        let source = LauncherSource::from_config(&config);
+        let source = LauncherSource::new(&config);
         let ids: Vec<String> = source.instances().into_iter().map(|(id, _)| id).collect();
         assert_eq!(ids.len(), 2);
     }
@@ -187,14 +187,14 @@ mod tests {
     #[test]
     fn launcher_source_skips_unknown_types() {
         let config = config_with_launcher("mystery", "no-such-type");
-        let source = LauncherSource::from_config(&config);
+        let source = LauncherSource::new(&config);
         assert!(source.instances().is_empty());
     }
 
     #[test]
     fn launcher_source_catalog_contains_all_registered_types() {
         let config = Config::default();
-        let source = LauncherSource::from_config(&config);
+        let source = LauncherSource::new(&config);
         let catalog = source.catalog();
         assert!(catalog.contains_key("claude"));
         assert!(catalog.contains_key("bob"));
@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn launcher_source_config_schema_returns_schema_for_known_type() {
         let config = Config::default();
-        let source = LauncherSource::from_config(&config);
+        let source = LauncherSource::new(&config);
         assert!(source.config_schema("claude").is_some());
         assert!(source.config_schema("bob").is_some());
         assert!(source.config_schema("bobide").is_some());

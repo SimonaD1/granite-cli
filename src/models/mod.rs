@@ -287,16 +287,14 @@ mod tests {
         ids
     }
 
-    impl ModelSource {
-        /// Models over a provider source of their own, for a test that needs no
-        /// other kind. Commands ask the application context, whose sources share
-        /// one provider per configured id.
-        pub(crate) fn from_config(config: &crate::config::Config) -> Self {
-            Self::with_providers(
-                config,
-                Arc::new(crate::providers::ProviderSource::from_config(config)),
-            )
-        }
+    /// Models over a provider source of their own, for a test that needs no
+    /// other kind. Commands ask the application context, whose sources share
+    /// one provider per configured id.
+    fn source(config: &crate::config::Config) -> ModelSource {
+        ModelSource::with_providers(
+            config,
+            Arc::new(crate::providers::ProviderSource::with_proxy(config, None)),
+        )
     }
 
     #[test]
@@ -326,7 +324,7 @@ mod tests {
             },
         );
 
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
         let mut ids: Vec<String> = source.instances().into_iter().map(|(id, _)| id).collect();
         ids.sort();
         assert_eq!(
@@ -362,7 +360,7 @@ mod tests {
             },
         );
 
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
         let provider = source.provider_for("granite-3.1-8b-instruct").unwrap();
         assert_eq!(provider.base_url(), "http://localhost:11434");
     }
@@ -383,7 +381,7 @@ mod tests {
             },
         );
 
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
         let err = source
             .provider_for("granite-3.1-8b-instruct")
             .err()
@@ -412,7 +410,7 @@ mod tests {
             },
         );
 
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
         assert!(source.instances().is_empty());
     }
 
@@ -432,7 +430,7 @@ mod tests {
             },
         );
 
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
         let first = source.get("granite-3.1-8b-instruct").unwrap();
         let second = source.get("granite-3.1-8b-instruct").unwrap();
         assert!(
@@ -458,7 +456,7 @@ mod tests {
             },
         );
 
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
         let from_instances = source
             .instances()
             .into_iter()
@@ -473,7 +471,7 @@ mod tests {
     fn get_errs_naming_an_id_that_is_not_configured() {
         use crate::config::Config;
 
-        let source = ModelSource::from_config(&Config::default());
+        let source = source(&Config::default());
         let err = source
             .get("not-configured")
             .err()
@@ -501,7 +499,7 @@ mod tests {
             },
         );
 
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
         let err = source
             .get("mystery")
             .err()
@@ -528,7 +526,7 @@ mod tests {
             );
         }
 
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
         assert!(cached_ids(&source).is_empty(), "nothing is built up front");
         source.get("granite-3.1-8b-instruct").unwrap();
         assert_eq!(
@@ -560,7 +558,7 @@ mod tests {
             );
         }
 
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
         // The healthy model is reachable on its own, without the broken one
         // being touched at all.
         assert!(source.get("granite-3.1-8b-instruct").is_ok());
@@ -686,7 +684,7 @@ mod tests {
         use base::ModelLookup;
 
         let config = configured("granite-3.1-8b-instruct");
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
 
         // The catalog model is a text model with no vision support.
         let wants_vision = ModelRequirement {
@@ -710,7 +708,7 @@ mod tests {
         use base::ModelLookup;
 
         let config = configured("granite-3.1-8b-instruct");
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
 
         assert!(
             source.resolve("granite-3.1-8b-instruct", None).is_ok(),
@@ -734,7 +732,7 @@ mod tests {
 
         let mut config = configured("granite-3.1-8b-instruct");
         config.providers.clear();
-        let source = ModelSource::from_config(&config);
+        let source = source(&config);
 
         let err = source
             .resolve("granite-3.1-8b-instruct", None)
